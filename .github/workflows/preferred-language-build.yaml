@@ -1,0 +1,19 @@
+name: Preferred Language Android Build
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+jobs:
+  android-arm64:
+    uses: ./.github/workflows/main.yaml
+    permissions:
+      packages: write
+      pull-requests: write
+    with:
+      platform: android-arm64
+      nightly: false
+    secrets:
+      datadog_api_key: ${{ secrets.DD_API_KEY }}
