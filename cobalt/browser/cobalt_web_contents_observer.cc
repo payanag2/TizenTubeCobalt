@@ -17,8 +17,11 @@
 #include "base/functional/bind.h"
 #include "base/logging.h"
 #include "base/metrics/histogram_functions.h"
+#include "base/strings/utf_string_conversions.h"
 #include "base/timer/timer.h"
+#include "base/values.h"
 #include "content/public/browser/navigation_handle.h"
+#include "content/public/browser/render_frame_host.h"
 #include "net/base/net_errors.h"
 #if BUILDFLAG(IS_ANDROIDTV)
 #include "starboard/android/shared/starboard_bridge.h"
@@ -33,6 +36,98 @@ namespace {
 const int kNavigationTimeoutSeconds = 30;
 #if BUILDFLAG(IS_ANDROIDTV)
 const int kJniErrorTypeConnectionError = 0;
+
+// TizenTube/YouTube TV exposes subtitle choices through its internal command
+// resolver. This small injected patch makes Persian (fa) the preferred
+// auto-translation language, so the user does not have to navigate the long
+// Auto-translate -> Other languages list for every video.
+constexpr char kPreferredSubtitleLanguageScript[] = R"JS(
+(function() {
+  'use strict';
+  if (window.__ttPreferredSubtitleLanguageInstalled) return;
+  window.__ttPreferredSubtitleLanguageInstalled = true;
+
+  const preferredCode = 'fa';
+  const preferredName = 'Persian';
+  let attempts = 0;
+
+  function install() {
+    try {
+      if (!window._yttv) return false;
+      const holder = Object.values(window._yttv).find(
+        x => x && x.instance && typeof x.instance.resolveCommand === 'function');
+      if (!holder) return false;
+
+      const resolver = holder.instance.resolveCommand;
+      if (resolver.__ttPreferredSubtitleLanguage) return true;
+
+      holder.instance.resolveCommand = function(command) {
+        const popupType = command && command.openPopupAction &&
+          command.openPopupAction.uniqueId;
+        const result = resolver.apply(this, arguments);
+
+        if (popupType === 'CLIENT_OVERLAY_TYPE_CAPTIONS_AUTO_TRANSLATE') {
+          try {
+            const items = command.openPopupAction.popup
+              .overlaySectionRenderer.overlay
+              .overlayTwoPanelRenderer.actionPanel
+              .overlayPanelRenderer.content
+              .overlayPanelItemListRenderer.items;
+
+            const preferred = items.find(item => {
+              const commands = item && item.compactLinkRenderer &&
+                item.compactLinkRenderer.serviceEndpoint &&
+                item.compactLinkRenderer.serviceEndpoint.commandExecutorCommand &&
+                item.compactLinkRenderer.serviceEndpoint.commandExecutorCommand.commands;
+              const translation = commands && commands[0] &&
+                commands[0].selectSubtitlesTrackCommand &&
+                commands[0].selectSubtitlesTrackCommand.translationLanguage;
+              return translation &&
+                (translation.languageCode === preferredCode ||
+                 translation.languageName === preferredName);
+            });
+
+            const commands = preferred && preferred.compactLinkRenderer &&
+              preferred.compactLinkRenderer.serviceEndpoint &&
+              preferred.compactLinkRenderer.serviceEndpoint.commandExecutorCommand &&
+              preferred.compactLinkRenderer.serviceEndpoint.commandExecutorCommand.commands;
+            const preferredCommand = commands && commands[0];
+
+            if (preferredCommand) {
+              // Let the Auto-translate overlay open first, then execute the
+              // same command that a manual Persian selection would execute.
+              setTimeout(() => {
+                try {
+                  resolver.call(this, preferredCommand);
+                  console.info('[TizenTube] Preferred subtitle language: Persian');
+                } catch (e) {
+                  console.warn('[TizenTube] Could not auto-select Persian', e);
+                }
+              }, 0);
+            }
+          } catch (e) {
+            console.warn('[TizenTube] Preferred subtitle language patch failed', e);
+          }
+        }
+
+        return result;
+      };
+
+      holder.instance.resolveCommand.__ttPreferredSubtitleLanguage = true;
+      console.info('[TizenTube] Preferred auto-translate language installed: Persian (fa)');
+      return true;
+    } catch (e) {
+      console.warn('[TizenTube] Preferred subtitle language initialization failed', e);
+      return false;
+    }
+  }
+
+  const timer = setInterval(() => {
+    if (install() || ++attempts >= 120) clearInterval(timer);
+  }, 500);
+  install();
+})();
+)JS";
 #endif  // BUILDFLAG(IS_ANDROIDTV)
 }  // namespace
 
@@ -97,6 +192,18 @@ void CobaltWebContentsObserver::DidFinishNavigation(
                               false);
 #if BUILDFLAG(IS_ANDROIDTV)
     platform_error_raised_count_ = 0;
+
+    // Install the patch after the main document has committed. The injected
+    // code waits for YouTube TV's internal resolver because it is initialized
+    // asynchronously after navigation.
+    const GURL& url = navigation_handle->GetURL();
+    if (url.SchemeIsHTTPOrHTTPS() &&
+        (url.host_piece().find("youtube.com") != std::string_view::npos ||
+         url.host_piece().find("youtube-nocookie.com") != std::string_view::npos)) {
+      web_contents()->GetPrimaryMainFrame()->ExecuteJavaScript(
+          base::UTF8ToUTF16(kPreferredSubtitleLanguageScript),
+          base::BindOnce([](base::Value) {}));
+    }
 #endif
   }
 }
