@@ -197,9 +197,10 @@ void CobaltWebContentsObserver::DidFinishNavigation(
     // code waits for YouTube TV's internal resolver because it is initialized
     // asynchronously after navigation.
     const GURL& url = navigation_handle->GetURL();
+    const std::string host = url.host();
     if (url.SchemeIsHTTPOrHTTPS() &&
-        (url.host_piece().find("youtube.com") != std::string_view::npos ||
-         url.host_piece().find("youtube-nocookie.com") != std::string_view::npos)) {
+        (host.find("youtube.com") != std::string::npos ||
+         host.find("youtube-nocookie.com") != std::string::npos)) {
       web_contents()->GetPrimaryMainFrame()->ExecuteJavaScript(
           base::UTF8ToUTF16(kPreferredSubtitleLanguageScript),
           base::BindOnce([](base::Value) {}));
