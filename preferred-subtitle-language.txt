@@ -1,4 +1,0 @@
-Preferred Auto-translate Language: Persian (fa)
-
-Requested behavior:
-Captions -> Auto-translate should use Persian directly as the preferred auto-translation language, instead of requiring the user to open Other languages and find Persian each time.
