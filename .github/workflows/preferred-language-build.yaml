@@ -13,7 +13,7 @@ jobs:
       packages: write
       pull-requests: write
     with:
-      platform: android-armv7
+      platform: android-arm
       nightly: false
     secrets:
       datadog_api_key: ${{ secrets.DD_API_KEY }}
